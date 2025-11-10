@@ -1,4 +1,4 @@
-name: Build Debian Package
+name: Build Packages and Binaries
 
 on:
   push:
@@ -114,10 +114,48 @@ jobs:
             build/*.changes
             build/*.buildinfo
 
+  build-static:
+    name: Build Static Binary (i386)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Extract package info from changelog
+        id: package_info
+        run: |
+          PKG_NAME=$(dpkg-parsechangelog -S Source)
+          PKG_COMMIT=$(grep '^COMMIT' Makefile | awk '{print $3}')
+          echo "name=$PKG_NAME" >> $GITHUB_OUTPUT
+          echo "commit=$PKG_COMMIT" >> $GITHUB_OUTPUT
+
+      - name: Build static binary in Alpine i386
+        env:
+          PACKAGE: ${{ steps.package_info.outputs.name }}
+          COMMIT: ${{ steps.package_info.outputs.commit }}
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/workspace i386/alpine:latest sh -c "
+            set -e
+            apk add --no-cache git build-base ncurses-dev ncurses-static upx
+            cd /workspace
+            git clone https://github.com/minios-linux/ncurses-menu.git source
+            cd source
+            git checkout ${COMMIT}
+            make static-packed
+            mv ncurses-menu-packed ../ncurses-menu-static-i386
+          "
+
+      - name: Upload Static Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-binary-i386
+          path: ncurses-menu-static-i386
+
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, build-static]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -131,5 +169,7 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/deb-packages-*/*.deb
+          files: |
+            artifacts/deb-packages-*/*.deb
+            artifacts/static-binary-i386/ncurses-menu-static-i386
           generate_release_notes: true
